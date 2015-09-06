@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+SBT_COMMAND="sbt"
+
+if [[ ! $(which $SBT_COMMAND) ]]; then
+  echo "Error: $SBT_COMMAND command not found, you can install like this:"
+  echo "  $ brew install sbt"
+  exit 1
+fi
+
+$SBT_COMMAND test

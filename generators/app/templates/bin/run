@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+
+ERROR_LOG_PREFIX="Error: "
+CONFIG_FILE="spark.json"
+SBT_COMMAND="sbt"
+SPARK_COMMAND="spark-submit"
+DEFAULT_SPARK_SUBMIT_OPTIONS="--conf spark.driver.userClassPathFirst=true --conf spark.executor.userClassPathFirst=true"
+AZKABAN_RC_FILE="${HOME}/.azkabanrc"
+AZKABAN_JOB_FILE=".azkaban/jobs.py"
+
+die() {
+  if [ $? -ne 0 ]; then
+    if [ -n "$1" ]; then
+      echo "${ERROR_LOG_PREFIX}$1"
+    fi
+    exit 1
+  fi
+}
+
+check_requirements() {
+  if [[ ! $(which $SBT_COMMAND) ]]; then
+    echo "${ERROR_LOG_PREFIX}$SBT_COMMAND command not found, you can install like this:"
+    echo "  $ brew install sbt"
+    exit 1
+  fi
+
+  if [[ ! $(which $SPARK_COMMAND) ]]; then
+    echo "${ERROR_LOG_PREFIX}$SPARK_COMMAND command not found, you need install Apache Spark first. For example:"
+    echo "  $ brew install apache-spark"
+    exit 1
+  fi
+
+  if [[ ! -e "$CONFIG_FILE" ]]; then
+    echo "${ERROR_LOG_PREFIX}$CONFIG_FILE not found"
+    exit 1
+  fi
+  CONFIGS=$(cat "$CONFIG_FILE")
+  # Try load JSON once to verify if file format is correct
+  echo "$CONFIGS" | python -c "import json, sys; json.load(sys.stdin)"
+  if [[ $? -ne 0 ]]; then
+    echo "${ERROR_LOG_PREFIX}$CONFIG_FILE invalid file format"
+    exit 1
+  fi
+}
+
+parse_args() {
+  case "$1" in
+    local|LOCAL)
+      MASTER="local"
+      ;;
+    yarn|YARN)
+      MASTER="yarn-cluster"
+      if [[ "$2" == "--schedule" ]]; then
+        ENABLE_SCHEDULE="true"
+      else
+        ENABLE_SCHEDULE="false"
+      fi
+      ;;
+    *)
+      echo "Usage: bin/run {local|yarn [--schedule]} [args]"
+      exit 1
+  esac
+}
+
+# Get config from $CONFIG_FILE
+#
+# Params:
+#   $1: config name, e.g. a.b.c
+#   $2: default value, optional
+get_config() {
+  # Translate string from "a.b.c" to "a b c"
+  CONF_NAME_ARRAY=$(echo "$1" | tr "." " ")
+  # Convert $CONF_NAME_ARRAY to Python dict key
+  # e.g. "a b c" => "['a']['b']['c']"
+  for n in $CONF_NAME_ARRAY; do
+    CONF_DICT_KEY="${CONF_DICT_KEY}['${n}']"
+  done
+  # Get config
+  CONF=$(echo "$CONFIGS" | python -c "import json, sys; print json.dumps(json.load(sys.stdin)$CONF_DICT_KEY).strip('\"')")
+  if [[ $? -ne 0 ]]; then
+    # If get config failed, return default value if provided.
+    if [[ "$2" == "" ]]; then
+      exit 1
+    else
+      echo "$2" | python -c "import sys; print sys.stdin.read().strip('\'').strip('\"')"
+    fi
+  else
+    echo "$CONF"
+  fi
+}
+
+assembly_uber_jar() {
+  $SBT_COMMAND assembly
+}
+
+prepare_azkaban_job_file() {
+  if [[ -n "$@" ]]; then
+    ARGS=" $@"
+  fi
+  mkdir -p .azkaban
+cat > "$AZKABAN_JOB_FILE" << EOF
+import os.path
+from azkaban import Job, Project
+
+project = Project('${APP_NAME}', root=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project.properties = {
+    'failure.emails': '${FAILURE_EMAILS}',
+    'success.emails': '${SUCCESS_EMAILS}',
+    'env.HDFS_USERNAME': '${HDFS_USERNAME}'
+}
+project.add_file('${ASSEMBLY_JAR_PATH}', 'app.jar')
+project.add_job('${AZKABAN_JOB_NAME}', Job({'type': 'command', 'command': '${SPARK_COMMAND} --verbose --proxy-user ${HDFS_USERNAME} --master ${MASTER} ${DEFAULT_SPARK_SUBMIT_OPTIONS} ${EXTRA_SPARK_SUBMIT_OPTIONS} --class ${APP_ENTRY_POINT} app.jar${ARGS}'}))
+EOF
+}
+
+check_requirements
+parse_args "$@" && shift
+assembly_uber_jar
+
+APP_NAME=$(get_config "appName"); die
+APP_ENTRY_POINT=$(get_config "appEntryPoint"); die
+EXTRA_SPARK_SUBMIT_OPTIONS=$(get_config "extraSparkSubmitOptions" "''")
+ASSEMBLY_JAR_PATH=$(find target -name "*-assembly.jar")
+
+case "$MASTER" in
+  local)
+    $SPARK_COMMAND --master "$MASTER" ${DEFAULT_SPARK_SUBMIT_OPTIONS} ${EXTRA_SPARK_SUBMIT_OPTIONS} --class "$APP_ENTRY_POINT" "$ASSEMBLY_JAR_PATH" "$@"
+    ;;
+
+  yarn-cluster)
+    AZKABAN_JOB_NAME=$APP_NAME
+    HDFS_USERNAME=$(get_config "hdfsUsername"); die
+    FAILURE_EMAILS=$(get_config "failureEmails" "''")
+    SUCCESS_EMAILS=$(get_config "successEmails" "''")
+    if [[ "$ENABLE_SCHEDULE" == "true" ]]; then
+      SCHEDULE_START_DATE=$(get_config "schedule.startDate"); die
+      SCHEDULE_START_TIME=$(get_config "schedule.startTime"); die
+      SCHEDULE_PERIOD=$(get_config "schedule.period"); die
+      shift  # remove "--schedule"
+    fi
+
+    if [[ ! $(which azkaban) ]]; then
+      echo "${ERROR_LOG_PREFIX}azkaban command not found, you can install like this:"
+      echo "  $ pip install azkaban"
+      exit 1
+    fi
+    if [[ ! -e "$AZKABAN_RC_FILE" ]]; then
+      echo "${ERROR_LOG_PREFIX}$AZKABAN_RC_FILE not found"
+      exit 1
+    fi
+    if [[ "$HDFS_USERNAME" == "" ]]; then
+      echo "${ERROR_LOG_PREFIX}hdfsUsername must be set"
+      exit 1
+    fi
+
+    prepare_azkaban_job_file "$@"
+    azkaban build -cp "$AZKABAN_JOB_FILE"
+    if [[ "$ENABLE_SCHEDULE" == "true" ]]; then
+      azkaban schedule -bkp "$APP_NAME" -s "$SCHEDULE_PERIOD" -d "$SCHEDULE_START_DATE" -t "$SCHEDULE_START_TIME" "$AZKABAN_JOB_NAME"
+    else
+      azkaban run -bkp "$APP_NAME" "$AZKABAN_JOB_NAME"
+    fi
+    ;;
+esac
