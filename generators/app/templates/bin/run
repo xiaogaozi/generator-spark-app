@@ -115,7 +115,7 @@ EOF
 
 check_requirements
 parse_args "$@" && shift
-assembly_uber_jar
+assembly_uber_jar; die "$SBT_COMMAND assembly failed"
 
 APP_NAME=$(get_config "appName"); die
 APP_ENTRY_POINT=$(get_config "appEntryPoint"); die
