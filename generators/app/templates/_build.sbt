@@ -6,6 +6,8 @@ version := "0.0.1"
 
 scalaVersion := "<%= scalaVersion %>"
 
+scalacOptions ++= Seq("-deprecation", "-feature")
+
 libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-core" % "<%= sparkVersion %>" % "provided",
   "org.scalacheck" %% "scalacheck" % "1.12.4" % "test",

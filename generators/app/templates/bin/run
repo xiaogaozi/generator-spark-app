@@ -4,7 +4,6 @@ ERROR_LOG_PREFIX="Error: "
 CONFIG_FILE="spark.json"
 SBT_COMMAND="sbt"
 SPARK_COMMAND="spark-submit"
-DEFAULT_SPARK_SUBMIT_OPTIONS="--conf spark.driver.userClassPathFirst=true --conf spark.executor.userClassPathFirst=true"
 AZKABAN_RC_FILE="${HOME}/.azkabanrc"
 AZKABAN_JOB_FILE=".azkaban/jobs.py"
 
@@ -109,7 +108,7 @@ project.properties = {
     'env.HDFS_USERNAME': '${HDFS_USERNAME}'
 }
 project.add_file('${ASSEMBLY_JAR_PATH}', 'app.jar')
-project.add_job('${AZKABAN_JOB_NAME}', Job({'type': 'command', 'command': '${SPARK_COMMAND} --verbose --proxy-user ${HDFS_USERNAME} --master ${MASTER} ${DEFAULT_SPARK_SUBMIT_OPTIONS} ${EXTRA_SPARK_SUBMIT_OPTIONS} --class ${APP_ENTRY_POINT} app.jar${ARGS}'}))
+project.add_job('${AZKABAN_JOB_NAME}', Job({'type': 'command', 'command': '${SPARK_COMMAND} --verbose --proxy-user ${HDFS_USERNAME} --master ${MASTER} --name ${APP_NAME} ${EXTRA_SPARK_SUBMIT_OPTIONS} --class ${APP_ENTRY_POINT} app.jar${ARGS}'}))
 EOF
 }
 
@@ -124,7 +123,7 @@ ASSEMBLY_JAR_PATH=$(find target -name "*-assembly.jar")
 
 case "$MASTER" in
   local)
-    $SPARK_COMMAND --master "$MASTER" ${DEFAULT_SPARK_SUBMIT_OPTIONS} ${EXTRA_SPARK_SUBMIT_OPTIONS} --class "$APP_ENTRY_POINT" "$ASSEMBLY_JAR_PATH" "$@"
+    $SPARK_COMMAND --master "$MASTER" --name "$APP_NAME" ${EXTRA_SPARK_SUBMIT_OPTIONS} --class "$APP_ENTRY_POINT" "$ASSEMBLY_JAR_PATH" "$@"
     ;;
 
   yarn-cluster)

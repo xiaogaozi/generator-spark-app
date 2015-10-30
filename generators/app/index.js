@@ -29,11 +29,11 @@ module.exports = yeoman.generators.Base.extend({
     }, {
       name: 'scalaVersion',
       message: 'Scala version',
-      default: '2.10.5'
+      default: '2.10.6'
     }, {
       name: 'sparkVersion',
       message: 'Spark version',
-      default: '1.4.1'
+      default: '1.5.1'
     }];
 
     this.prompt(prompts, function (props) {
